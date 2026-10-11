@@ -1,0 +1,12 @@
+# node_modules diabaikan
+node_modules/
+
+# hasil output & kredensial TIDAK boleh masuk repo
+output/
+*.log
+*.env
+**/.env
+proxies*.txt
+proxies*.list
+# symlink lokal untuk uji cepat (bukan bagian repo)
+node_modules

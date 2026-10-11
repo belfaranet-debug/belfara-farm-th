@@ -1,0 +1,18 @@
+{
+  "name": "belfara-farm-th",
+  "version": "1.0.0",
+  "description": "TokenHarbor API-key provisioning with self-hosted Tempik inbox + real Chrome. Fixes the issues in 0xgetz/tokenharbor-bulk-creator that made signups fail.",
+  "type": "module",
+  "main": "src/index.mjs",
+  "bin": { "belfara-farm-th": "src/index.mjs" },
+  "scripts": {
+    "start": "node src/index.mjs",
+    "create": "node src/index.mjs -n 1",
+    "doctor": "node src/index.mjs --doctor"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "playwright": "1.47.2"
+  },
+  "license": "MIT"
+}
