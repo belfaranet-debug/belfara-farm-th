@@ -10,3 +10,7 @@ proxies*.txt
 proxies*.list
 # symlink lokal untuk uji cepat (bukan bagian repo)
 node_modules
+
+# python cache
+__pycache__/
+*.pyc
