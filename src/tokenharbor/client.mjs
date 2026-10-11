@@ -119,42 +119,50 @@ export class TokenHarborClient {
     return ok;
   }
 
-  /** Buat satu API key dengan label. Mengembalikan string thk_live_... atau null. */
+  /** Buat satu API key dengan label. Retry 3× jika modal gagal render. Mengembalikan string thk_live_... atau null. */
   async createApiKey(page, label) {
-    try {
-      // Pastikan di halaman API keys (setelah verify, halaman bisa di mana saja)
-      await page.goto(`${BASE}/dashboard/api-keys`, { waitUntil: 'domcontentloaded', timeout: 45000 });
-      await new Promise(r => setTimeout(r, 2500));
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await page.goto(`${BASE}/dashboard/api-keys`, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await new Promise(r => setTimeout(r, 2500));
 
-      const nk = page.getByRole('button', { name: /new key/i }).first();
-      if (!(await nk.count())) { this.#log('  [key] tombol New key tidak ada'); return null; }
-      await nk.click();
-      await new Promise(r => setTimeout(r, 1800));
+        const nk = page.getByRole('button', { name: /new key/i }).first();
+        if (!(await nk.count())) {
+          this.#log(`  [key] tombol New key tidak ada (attempt ${attempt}/3)`);
+          if (attempt < 3) { await new Promise(r => setTimeout(r, 2000)); continue; }
+          return null;
+        }
+        await nk.click();
+        await new Promise(r => setTimeout(r, 1800));
 
-      const labelInput = page.locator('input[type="text"]').first();
-      if (await labelInput.count()) await labelInput.fill(label).catch(() => {});
+        const labelInput = page.locator('input[type="text"]').first();
+        if (await labelInput.count()) await labelInput.fill(label).catch(() => {});
 
-      const create = page.getByRole('button', { name: /^create key$/i }).first();
-      if (await create.count()) {
-        await create.click();
-        await new Promise(r => setTimeout(r, 3500));
+        const create = page.getByRole('button', { name: /^create key$/i }).first();
+        if (await create.count()) {
+          await create.click();
+          await new Promise(r => setTimeout(r, 3500));
+        }
+
+        const txt = await page.evaluate(() => document.documentElement.innerHTML).catch(() => '');
+        const m = txt.match(/thk_live_[A-Za-z0-9_-]{20,}/);
+        if (m) {
+          this.#log(`  [key] dibuat: ${m[0].slice(0, 22)}...`);
+          const close = page.getByRole('button', { name: /^(close|done|ok)$/i }).first();
+          if (await close.count()) { await close.click().catch(() => {}); await new Promise(r => setTimeout(r, 1200)); }
+          return m[0];
+        }
+        this.#log(`  [key] tidak terbaca (attempt ${attempt}/3), retry...`);
+        await page.keyboard.press('Escape').catch(() => {});
+        if (attempt < 3) { await new Promise(r => setTimeout(r, 2000)); continue; }
+        return null;
+      } catch (e) {
+        this.#log(`  [key] ERR (attempt ${attempt}/3):`, e.message.substring(0, 90));
+        if (attempt < 3) { await new Promise(r => setTimeout(r, 2000)); continue; }
+        return null;
       }
-
-      const txt = await page.evaluate(() => document.documentElement.innerHTML).catch(() => '');
-      const m = txt.match(/thk_live_[A-Za-z0-9_-]{20,}/);
-      if (m) {
-        this.#log(`  [key] dibuat: ${m[0].slice(0, 22)}...`);
-        const close = page.getByRole('button', { name: /^(close|done|ok)$/i }).first();
-        if (await close.count()) { await close.click().catch(() => {}); await new Promise(r => setTimeout(r, 1200)); }
-        return m[0];
-      }
-      this.#log('  [key] tidak terbaca (mungkin sudah dibuat / modal beda)');
-      await page.keyboard.press('Escape').catch(() => {});
-      return null;
-    } catch (e) {
-      this.#log('  [key] ERR:', e.message.substring(0, 90));
-      return null;
     }
+    return null;
   }
 }
 

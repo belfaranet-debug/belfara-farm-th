@@ -118,6 +118,9 @@ async function main() {
   console.log('[tempik] session ok');
 
   const results = [];
+  const jsonlPath = out.replace(/\.json$/, '.jsonl');
+  const jsonlFd = await fs.open(jsonlPath, 'a');
+  let totalKeys = 0;
   const MAX_PROXY_ATTEMPTS = 6; // proxy residential sering gagal (~50%) -> retry pindah proxy
   let accountNum = 0;
   for (let di = 0; di < domains.length && accountNum < count; di++) {
@@ -167,12 +170,21 @@ async function main() {
           }
 
           // aktifkan free models
-          await client.enableFreeModels(page);
+          const freeOk = await client.enableFreeModels(page);
+          if (!freeOk) {
+            console.log('  [free-models] gagal — akun rusak, skip key creation');
+            await browser.close().catch(() => {});
+            done = true;
+            record.broken = true;
+            break;
+          }
 
-          // buat N key per akun
+          // buat N key per akun — skip akun kalau 3× gagal beruntun
+          let consecutiveFails = 0;
           for (let ki = 1; ki <= keysPerAccount; ki++) {
             const key = await client.createApiKey(page, `${prefix}-${String(accountNum).padStart(3, '0')}-${ki}`);
             if (key) {
+              consecutiveFails = 0;
               record.keys.push(key);
               if (doTest) {
                 const t = await testApiKey(key);
@@ -180,7 +192,12 @@ async function main() {
                 record.test = t.ok ? 'ok' : 'fail';
               }
             } else {
-              console.log(`[key ${ki}/${keysPerAccount}] gagal dibuat`);
+              consecutiveFails++;
+              console.log(`[key ${ki}/${keysPerAccount}] gagal dibuat (${consecutiveFails}/3)`);
+              if (consecutiveFails >= 3) {
+                console.log(`  [akun] 3× gagal beruntun — skip sisa key`);
+                break;
+              }
             }
           }
           await browser.close().catch(() => {});
@@ -191,16 +208,27 @@ async function main() {
       }
       if (!record.email) record.email = `${makeLocalPart(prefix)}@${domain}`;
       results.push(record);
+      // Incremental JSONL write — 1 line per akun selesai
+      await jsonlFd.write(JSON.stringify(record) + '\n');
+      totalKeys += record.keys.length;
     }
   }
 
+  await jsonlFd.close().catch(() => {});
   await fs.mkdir(path.dirname(out), { recursive: true });
   await fs.writeFile(out, JSON.stringify(results, null, 2));
   console.log(`\nSelesai. Hasil: ${out}`);
+  console.log(`Incremental JSONL: ${jsonlPath}`);
   console.log('Ringkasan:');
   let okKeys = 0;
-  for (const r of results) { okKeys += r.keys.length; console.log(`  ${r.email} -> ${r.keys.length} key`); }
+  let brokenAccounts = 0;
+  for (const r of results) {
+    okKeys += r.keys.length;
+    if (r.broken) brokenAccounts++;
+    console.log(`  ${r.email} -> ${r.keys.length} key${r.broken ? ' (AKUN RUSAK)' : ''}`);
+  }
   console.log(`Total key: ${okKeys}`);
+  console.log(`Akun rusak: ${brokenAccounts}`);
 }
 
 main().catch((e) => { console.error('FATAL:', e); process.exit(1); });
