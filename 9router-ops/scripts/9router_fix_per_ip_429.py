@@ -150,6 +150,41 @@ def cmd_list(con, name):
     print("  modelLock  :", locked)
 
 
+def cmd_recheck(con, name, db=DB):
+    """Reset status basi: paksa testStatus=active + buang backoff/modelLock.
+
+    Pakai ini kalau koneksi masih berstatus `unavailable` PADAHAL key-nya sudah
+    terbukti hidup (mis. `curl -x <proxy> ...` balas 200). `testStatus` adalah
+    cache yang tidak selalu ikut ter-refresh setelah proxy diperbaiki.
+    Tidak mengubah proxy sama sekali.
+    """
+    rows = connection_rows(con, name)
+    rw = sqlite3.connect(db)
+    n = 0
+    for cid, raw in rows:
+        try:
+            d = json.loads(raw) if raw else {}
+        except Exception:  # noqa: BLE001
+            continue
+        d["testStatus"] = "active"
+        d["backoffLevel"] = 0
+        d["errorCode"] = None
+        d["lastError"] = None
+        d["lastErrorAt"] = None
+        d["rateLimitedUntil"] = None
+        for key in list(d.keys()):
+            if key.startswith("modelLock_"):
+                d.pop(key, None)
+        rw.execute(
+            "UPDATE providerConnections SET isActive = 1, data = ? WHERE id = ?",
+            (json.dumps(d), cid),
+        )
+        n += 1
+    rw.commit()
+    rw.close()
+    print(f"recheck: {n} koneksi di-reset ke active (proxy tidak diubah)")
+
+
 def cmd_fix(con, name, proxies, limit, apply_, probe_model, base, db=DB):
     rows = connection_rows(con, name)
     print(f"node '{name}': {len(rows)} koneksi | {len(proxies)} proxy")
@@ -232,6 +267,8 @@ def main():
     ap.add_argument("--apply", action="store_true", help="tulis perubahan (default: dry-run)")
     ap.add_argument("--probe", metavar="MODEL", help="setelah fix, probe lane ini (mis. th/deepseek-v4-flash:free)")
     ap.add_argument("--list", action="store_true", help="tampilkan ringkasan state lalu keluar")
+    ap.add_argument("--recheck", action="store_true",
+                    help="reset status basi (testStatus=active, buang backoff/modelLock) tanpa mengubah proxy")
     args = ap.parse_args()
 
     db = args.db
@@ -242,6 +279,23 @@ def main():
 
     if args.list:
         cmd_list(con, args.node)
+        con.close()
+        return
+
+    if args.recheck:
+        cmd_recheck(con, args.node, db)
+        cmd_list(con, args.node)
+        if args.probe:
+            bearer = get_bearer(db)
+            print(f"\nprobe lane '{args.probe}':")
+            ok = 0
+            for i in range(5):
+                code, lat, extra = probe(args.base, bearer, args.probe)
+                if code == "200":
+                    ok += 1
+                print(f"  [{i + 1}] {code:10s} {lat:7s} {extra}")
+                time.sleep(1.5)
+            print(f"hasil: {ok}/5 OK")
         con.close()
         return
 

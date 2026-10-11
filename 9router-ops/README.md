@@ -142,6 +142,8 @@ Skrip siap pakai: `scripts/9router_fix_per_ip_429.py`
 
 ### Hasil verifikasi
 
+**Dell (v0.5.81):**
+
 | Uji | Hasil |
 |---|---|
 | Probe 3 model × 4 putaran | **12/12 HTTP 200** |
@@ -149,9 +151,46 @@ Skrip siap pakai: `scripts/9router_fix_per_ip_429.py`
 | Koneksi dengan proxy | **598/598** |
 | Latensi | 3–27s (`mimo` lebih lambat) |
 
+**r5-2600 (v0.5.35):**
+
+| Uji | Hasil |
+|---|---|
+| Baseline sebelum fix | 639 unavailable, probe **HTTP 000 timeout** |
+| Setelah `--apply` | 5/5 probe OK |
+| Stabilitas 15 probe (3 model) | **15/15 OK**, 0 empty, 0 fail |
+| `testStatus` setelah `--recheck` | **639/639 active**, `modelLock` 0 |
+| Latensi | 2.2–19.7s |
+
+---
+
+## 3b. `testStatus` bisa BASI meski key sudah hidup
+
+Setelah `--apply`, 3 koneksi di r5-2600 **masih** `unavailable` + `modelLock`. Aku tes manual:
+
+```
+direct : HTTP 429 Network rate limit reached
+proxy  : HTTP 200 ✅   (egress 103.101.193.118)
+```
+
+**Key hidup, proxy bekerja — statusnya cuma cache yang belum ikut refresh.**
+Perbaikan: `--recheck` (reset `testStatus=active` + buang `backoff`/`modelLock`,
+**tanpa** mengubah proxy).
+
+```bash
+python3 9router_fix_per_ip_429.py --recheck --probe th/deepseek-v4-flash:free
+```
+
+Aturan: kalau `curl -x <proxy>` balas 200 tapi row masih `unavailable`,
+**jangan** ubah proxy lagi — cukup `--recheck`.
+
 ---
 
 ## 4. Pitfalls
+
+0. **Parser respons: 9router balas `content-type: text/event-stream` walau `stream:false`,
+   dan body punya trailing bytes.** `json.load()` gagal (`Extra data`) — pakai
+   `json.JSONDecoder().raw_decode(raw)[0]`. Ini bug parser, bukan kegagalan provider.
+   (Sempat membuat 15/15 probe terlihat "FAIL" padahal semuanya HTTP 200.)
 
 1. **Versi yang jalan ≠ `package.json`.** Selalu `curl /api/version` + `readlink /proc/<pid>/cwd`.
 2. **Edit source tree ≠ edit build yang jalan.** Cek `grep` di `.next-cli-build/server` dulu.
