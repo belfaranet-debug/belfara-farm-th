@@ -36,13 +36,14 @@ export class TempikInbox {
     return this.sessionId;
   }
 
-  async createInbox(localPart) {
-    const d = await this.#fetch('/api/inboxes', {
+  async createInbox(localPart, domain = null) {
+    const d = domain || this.domain;
+    const res = await this.#fetch('/api/inboxes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ domain: this.domain, localPart }),
+      body: JSON.stringify({ domain: d, localPart }),
     });
-    return d.address || `${localPart}@${this.domain}`;
+    return res.address || `${localPart}@${d}`;
   }
 
   /** Poll sampai menemukan link verifikasi TokenHarbor. Balas URL link atau null. */

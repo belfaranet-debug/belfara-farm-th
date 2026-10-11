@@ -140,7 +140,7 @@ export class TokenHarborClient {
         await new Promise(r => setTimeout(r, 3500));
       }
 
-      const txt = await page.evaluate(() => document.body.innerText).catch(() => '');
+      const txt = await page.evaluate(() => document.documentElement.innerHTML).catch(() => '');
       const m = txt.match(/thk_live_[A-Za-z0-9_-]{20,}/);
       if (m) {
         this.#log(`  [key] dibuat: ${m[0].slice(0, 22)}...`);

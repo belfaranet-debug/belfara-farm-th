@@ -104,80 +104,94 @@ async function main() {
   const allowHeadful = !!a.headful;
   const verifyTimeout = parseInt(a.timeout ?? '240000', 10) || 240000;
   const doTest = !!a.test;
+  const keysPerAccount = parseInt(a['keys-per-account'] ?? '1', 10) || 1;
+  const domains = (a.domains || mailDomain).split(',').map(d => d.trim()).filter(Boolean);
+  const accountsPerDomain = Math.ceil(count / domains.length);
 
   const proxies = await readProxyList(proxyFile);
-  console.log(`[config] count=${count} domain=${mailDomain} proxy=${proxies.length} test=${doTest}`);
+  console.log(`[config] count=${count} domains=${domains.join('|')} keys/account=${keysPerAccount} proxy=${proxies.length} test=${doTest}`);
   console.log(`[config] password=${password}`);  // aman: ini akun yang dibuat, bukan rahasia lama
 
   // session Tempik sekali, dipakai semua akun
-  const inbox = new TempikInbox({ baseUrl: mailBase, domain: mailDomain });
+  const inbox = new TempikInbox({ baseUrl: mailBase, domain: domains[0] });
   await inbox.createSession();
   console.log('[tempik] session ok');
 
   const results = [];
   const MAX_PROXY_ATTEMPTS = 6; // proxy residential sering gagal (~50%) -> retry pindah proxy
-  for (let i = 1; i <= count; i++) {
-    console.log(`\n=== Akun ${i}/${count} ===`);
-    const passwordForThis = password;
-    const record = { email: null, password: passwordForThis, keys: [], proxy_attempts: 0 };
-    let done = false;
-    for (let attempt = 1; attempt <= MAX_PROXY_ATTEMPTS && !done; attempt++) {
-      console.log(`\n  [attempt ${attempt}/${MAX_PROXY_ATTEMPTS}]`);
-      const email = `${makeLocalPart(prefix)}@${mailDomain}`;
-      try {
-        const address = await inbox.createInbox(localPartOf(email));
-        console.log('[tempik] inbox:', address);
+  let accountNum = 0;
+  for (let di = 0; di < domains.length && accountNum < count; di++) {
+    const domain = domains[di];
+    const targetForThisDomain = Math.min(accountsPerDomain, count - accountNum);
+    console.log(`\n=== Domain ${di + 1}/${domains.length}: ${domain} (${targetForThisDomain} akun) ===`);
+    for (let k = 0; k < targetForThisDomain && accountNum < count; k++) {
+      accountNum++;
+      console.log(`\n=== Akun ${accountNum}/${count} ===`);
+      const passwordForThis = password;
+      const record = { email: null, password: passwordForThis, keys: [], proxy_attempts: 0, domain };
+      let done = false;
+      for (let attempt = 1; attempt <= MAX_PROXY_ATTEMPTS && !done; attempt++) {
+        console.log(`\n  [attempt ${attempt}/${MAX_PROXY_ATTEMPTS}]`);
+        const email = `${makeLocalPart(prefix)}@${domain}`;
+        try {
+          const address = await inbox.createInbox(localPartOf(email), domain);
+          console.log('[tempik] inbox:', address);
 
-        // proxy: pilih acak tiap percobaan
-        let client = new TokenHarborClient({ proxy: null, headless: !allowHeadful });
-        if (proxies.length) {
-          const line = proxies[Math.floor(Math.random() * proxies.length)];
-          client = new TokenHarborClient({ proxy: TokenHarborClient.parseProxy(line), headless: !allowHeadful });
-        }
-        record.proxy_attempts = attempt;
-        const sess = await client.signup({ email, password: passwordForThis });
-        if (!sess) {
-          console.log('[akun] signup gagal, coba proxy lain');
-          continue;
-        }
-        record.email = email;
-        const { browser, page } = sess;
-
-        // tunggu email verifikasi
-        const link = await inbox.waitForVerifyLink(address, { timeoutMs: verifyTimeout, log: console.log });
-        if (!link) {
-          console.log('[akun] email verifikasi tidak sampai dalam batas waktu');
-          await browser.close().catch(() => {});
-          continue;
-        }
-        const verified = await client.verify(page, link);
-        if (!verified) {
-          console.log('[akun] verifikasi gagal');
-          await browser.close().catch(() => {});
-          continue;
-        }
-
-        // aktifkan free models
-        await client.enableFreeModels(page);
-
-        // buat 1 key (atau sesukamu: loop di sini untuk multi-key per akun)
-        const key = await client.createApiKey(page, `${prefix}-${String(i).padStart(2, '0')}`);
-        if (key) {
-          record.keys.push(key);
-          if (doTest) {
-            const t = await testApiKey(key);
-            console.log(`[test] ${t.ok ? 'OK ✅ ' + t.content : 'GAGAL ❌ ' + (t.error || '')}`);
-            record.test = t.ok ? 'ok' : 'fail';
+          // proxy: pilih acak tiap percobaan
+          let client = new TokenHarborClient({ proxy: null, headless: !allowHeadful });
+          if (proxies.length) {
+            const line = proxies[Math.floor(Math.random() * proxies.length)];
+            client = new TokenHarborClient({ proxy: TokenHarborClient.parseProxy(line), headless: !allowHeadful });
           }
+          record.proxy_attempts = attempt;
+          const sess = await client.signup({ email, password: passwordForThis });
+          if (!sess) {
+            console.log('[akun] signup gagal, coba proxy lain');
+            continue;
+          }
+          record.email = email;
+          const { browser, page } = sess;
+
+          // tunggu email verifikasi
+          const link = await inbox.waitForVerifyLink(address, { timeoutMs: verifyTimeout, log: console.log });
+          if (!link) {
+            console.log('[akun] email verifikasi tidak sampai dalam batas waktu');
+            await browser.close().catch(() => {});
+            continue;
+          }
+          const verified = await client.verify(page, link);
+          if (!verified) {
+            console.log('[akun] verifikasi gagal');
+            await browser.close().catch(() => {});
+            continue;
+          }
+
+          // aktifkan free models
+          await client.enableFreeModels(page);
+
+          // buat N key per akun
+          for (let ki = 1; ki <= keysPerAccount; ki++) {
+            const key = await client.createApiKey(page, `${prefix}-${String(accountNum).padStart(3, '0')}-${ki}`);
+            if (key) {
+              record.keys.push(key);
+              if (doTest) {
+                const t = await testApiKey(key);
+                console.log(`[test ${ki}/${keysPerAccount}] ${t.ok ? 'OK ✅ ' + t.content : 'GAGAL ❌ ' + (t.error || '')}`);
+                record.test = t.ok ? 'ok' : 'fail';
+              }
+            } else {
+              console.log(`[key ${ki}/${keysPerAccount}] gagal dibuat`);
+            }
+          }
+          await browser.close().catch(() => {});
+          done = true;
+        } catch (e) {
+          console.log('[akun] ERR:', e.message.substring(0, 120));
         }
-        await browser.close().catch(() => {});
-        done = true;
-      } catch (e) {
-        console.log('[akun] ERR:', e.message.substring(0, 120));
       }
+      if (!record.email) record.email = `${makeLocalPart(prefix)}@${domain}`;
+      results.push(record);
     }
-    if (!record.email) record.email = `${makeLocalPart(prefix)}@${mailDomain}`;
-    results.push(record);
   }
 
   await fs.mkdir(path.dirname(out), { recursive: true });
